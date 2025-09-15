@@ -14,6 +14,9 @@ permissions:
   id-token: write
   pull-requests: write # For commenting on PRs with coverage info
 
+env:
+  GO_VERSION: "1.24"
+
 jobs:
   test:
     name: Test Suite
@@ -26,7 +29,16 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: "1.24"
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Check Go module
+        run: |
+          if [ ! -f go.mod ]; then
+            echo "go.mod not found, initializing..."
+            go mod init github.com/autograph-pls || true
+          fi
+          echo "go.mod exists:"
+          cat go.mod
 
       - name: Cache Go modules
         uses: actions/cache@v3
@@ -34,9 +46,9 @@ jobs:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-go-1.24-${{ hashFiles('**/go.sum') }}
+          key: ${{ runner.os }}-go-${{ env.GO_VERSION }}-modules
           restore-keys: |
-            ${{ runner.os }}-go-1.24-
+            ${{ runner.os }}-go-${{ env.GO_VERSION }}-
 
       - name: Download dependencies
         run: go mod download
@@ -153,7 +165,26 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: "1.24"
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Check Go module
+        run: |
+          if [ ! -f go.mod ]; then
+            echo "go.mod not found, initializing..."
+            go mod init github.com/autograph-pls || true
+          fi
+          echo "go.mod exists:"
+          cat go.mod
+
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ env.GO_VERSION }}-modules
+          restore-keys: |
+            ${{ runner.os }}-go-${{ env.GO_VERSION }}-
 
       - name: Build binary
         run: go build -o autograph-pls
@@ -440,7 +471,26 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: "1.24"
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Check Go module
+        run: |
+          if [ ! -f go.mod ]; then
+            echo "go.mod not found, initializing..."
+            go mod init github.com/autograph-pls || true
+          fi
+          echo "go.mod exists:"
+          cat go.mod
+
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ env.GO_VERSION }}-modules
+          restore-keys: |
+            ${{ runner.os }}-go-${{ env.GO_VERSION }}-
 
       - name: Build release binaries
         run: |
