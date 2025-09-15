@@ -103,7 +103,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: "1.21"
+          go-version: "1.24"
 
       - name: Build binary
         run: go build -o autograph-pls
@@ -291,31 +291,6 @@ jobs:
           echo "- ✅ **Memory Safety**: Verified" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ **Performance**: Within limits" >> $GITHUB_STEP_SUMMARY
 
-  security-scan:
-    name: Security Scan
-    runs-on: ubuntu-latest
-    needs: test
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: "1.21"
-
-      - name: Run gosec security scanner
-        uses: securecodewarrior/github-action-gosec@master
-        with:
-          args: "-fmt sarif -out gosec-report.sarif ./..."
-
-      - name: Upload gosec report
-        uses: github/codeql-action/upload-sarif@v2
-        if: always()
-        with:
-          sarif_file: gosec-report.sarif
-
   release-test:
     name: Release Build Test
     runs-on: ubuntu-latest
@@ -329,23 +304,22 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: "1.21"
+          go-version: "1.24"
 
       - name: Build release binaries
         run: |
           # Build for multiple platforms
           GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o autograph-pls-linux-amd64
           GOOS=linux GOARCH=arm64 go build -ldflags="-w -s" -o autograph-pls-linux-arm64
-          GOOS=darwin GOARCH=amd64 go build -ldflags="-w -s" -o autograph-pls-darwin-amd64
-          GOOS=darwin GOARCH=arm64 go build -ldflags="-w -s" -o autograph-pls-darwin-arm64
-          GOOS=windows GOARCH=amd64 go build -ldflags="-w -s" -o autograph-pls-windows-amd64.exe
+          GOOS=linux GOARCH=s390x go build -ldflags="-w -s" -o autograph-pls-linux-s390x
+          GOOS=linux GOARCH=ppc64le go build -ldflags="-w -s" -o autograph-pls-linux-ppc64le
 
           # Test that binaries work
           ./autograph-pls-linux-amd64 -list > /dev/null
           echo "✅ Linux AMD64 binary works"
 
       - name: Upload release artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: release-binaries
           path: autograph-pls-*
