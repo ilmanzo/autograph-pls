@@ -17,12 +17,7 @@ permissions:
 jobs:
   test:
     name: Test Suite
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-        go-version: ["1.22", "1.23", "1.24"]
-      fail-fast: false
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
@@ -31,7 +26,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version: "1.24"
 
       - name: Cache Go modules
         uses: actions/cache@v3
@@ -39,9 +34,9 @@ jobs:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
+          key: ${{ runner.os }}-go-1.24-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-${{ matrix.go-version }}-
+            ${{ runner.os }}-go-1.24-
 
       - name: Download dependencies
         run: go mod download
@@ -60,21 +55,9 @@ jobs:
             exit 1
           fi
         shell: bash
-        if: runner.os != 'Windows'
-
-      - name: Run go fmt check (Windows)
-        run: |
-          $unformatted = gofmt -s -l .
-          if ($unformatted) {
-            Write-Host "Code is not formatted properly:"
-            Write-Host $unformatted
-            exit 1
-          }
-        shell: pwsh
-        if: runner.os == 'Windows'
 
       - name: Build binary
-        run: go build -o autograph-pls${{ runner.os == 'Windows' && '.exe' || '' }}
+        run: go build -o autograph-pls
 
       - name: Run unit tests
         run: go test -v -race -coverprofile=coverage.out ./...
@@ -128,7 +111,7 @@ jobs:
       - name: Upload coverage reports
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-${{ matrix.os }}-go${{ matrix.go-version }}
+          name: coverage-report
           path: |
             coverage.out
             coverage.html
@@ -153,12 +136,10 @@ jobs:
           path: coverage-badge/
 
       - name: Test algorithm listing
-        run: ./autograph-pls${{ runner.os == 'Windows' && '.exe' || '' }} -list
-        shell: bash
+        run: ./autograph-pls -list
 
       - name: Test help output
-        run: ./autograph-pls${{ runner.os == 'Windows' && '.exe' || '' }} -help
-        shell: bash
+        run: ./autograph-pls -help
 
   integration-test:
     name: Integration Tests
@@ -374,7 +355,7 @@ jobs:
       - name: Download coverage artifacts
         uses: actions/download-artifact@v4
         with:
-          name: coverage-ubuntu-latest-go1.24
+          name: coverage-report
           path: coverage-data
 
       - name: Process coverage data
