@@ -7,6 +7,13 @@ on:
     branches: [main, develop]
   workflow_dispatch:
 
+# Optional: Repository permissions for publishing coverage badges
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  pull-requests: write # For commenting on PRs with coverage info
+
 jobs:
   test:
     name: Test Suite
@@ -73,7 +80,50 @@ jobs:
         run: go test -v -race -coverprofile=coverage.out ./...
 
       - name: Generate coverage report
-        run: go tool cover -html=coverage.out -o coverage.html
+        run: |
+          go tool cover -html=coverage.out -o coverage.html
+          go tool cover -func=coverage.out -o coverage.txt
+
+          # Extract total coverage percentage
+          total_coverage=$(grep -E 'total:.*statements' coverage.txt | sed -E 's/.*statements\s+([0-9.]+)%.*/\1/')
+          echo "COVERAGE_PCT=$total_coverage" >> $GITHUB_ENV
+
+          # Check if coverage meets threshold
+          coverage_threshold=70.0
+          if (( $(echo "$total_coverage < $coverage_threshold" | bc -l) )); then
+            echo "::warning::Code coverage is below threshold! Current: ${total_coverage}%, Required: ${coverage_threshold}%"
+            echo "coverage_status=⚠️ Below Threshold" >> $GITHUB_ENV
+          else
+            echo "coverage_status=✅ Passed" >> $GITHUB_ENV
+          fi
+
+          # Create coverage badge JSON
+          mkdir -p coverage-badge
+          cat > coverage-badge/coverage.json << EOF
+          {
+            "schemaVersion": 1,
+            "label": "coverage",
+            "message": "${total_coverage}%",
+            "color": $(if (( $(echo "$total_coverage >= 80" | bc -l) )); then echo '"brightgreen"'; elif (( $(echo "$total_coverage >= $coverage_threshold" | bc -l) )); then echo '"yellow"'; else echo '"red"'; fi)
+          }
+          EOF
+
+          # Save threshold for other jobs
+          echo "COVERAGE_THRESHOLD=$coverage_threshold" >> $GITHUB_ENV
+
+      - name: Create Coverage Summary
+        run: |
+          echo "## 📊 Code Coverage Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | Coverage | Threshold |" >> $GITHUB_STEP_SUMMARY
+          echo "| :----: | :------: | :-------: |" >> $GITHUB_STEP_SUMMARY
+          echo "| ${{ env.coverage_status }} | ${{ env.COVERAGE_PCT }}% | 70.0% |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Detailed Coverage Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat coverage.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Upload coverage reports
         uses: actions/upload-artifact@v4
@@ -82,6 +132,25 @@ jobs:
           path: |
             coverage.out
             coverage.html
+            coverage.txt
+            coverage-badge/
+
+      - name: Check minimum coverage
+        run: |
+          # Compare with threshold and fail if below
+          if (( $(echo "${{ env.COVERAGE_PCT }} < ${{ env.COVERAGE_THRESHOLD }}" | bc -l) )); then
+            echo "::error::Code coverage is below threshold! Current: ${{ env.COVERAGE_PCT }}%, Required: ${{ env.COVERAGE_THRESHOLD }}%"
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              # Only fail on PRs to enforce coverage on new code
+              exit 1
+            fi
+          fi
+
+      - name: Upload coverage badge
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-badge
+          path: coverage-badge/
 
       - name: Test algorithm listing
         run: ./autograph-pls${{ runner.os == 'Windows' && '.exe' || '' }} -list
@@ -287,14 +356,100 @@ jobs:
           echo "### Test Status" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ **Build**: Successful" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ **Unit Tests**: Passed" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Code Coverage**: See Test Suite job" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ **Integration Tests**: Completed" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ **Memory Safety**: Verified" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ **Performance**: Within limits" >> $GITHUB_STEP_SUMMARY
 
+  coverage-report:
+    name: Coverage Report
+    runs-on: ubuntu-latest
+    needs: test
+    if: success() || failure()
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-ubuntu-latest-go1.24
+          path: coverage-data
+
+      - name: Process coverage data
+        run: |
+          cd coverage-data
+          if [ ! -f coverage.txt ]; then
+            echo "No coverage data found. Test job may have failed."
+            echo "## ❌ No Coverage Data Available" > ../coverage-summary.md
+            exit 0
+          fi
+
+          # Parse coverage percentage
+          total_coverage=$(grep -E 'total:.*statements' coverage.txt | sed -E 's/.*statements\s+([0-9.]+)%.*/\1/')
+          echo "Total coverage: ${total_coverage}%"
+
+          # Generate coverage report summary
+          echo "## 📊 Detailed Coverage Report" > coverage-summary.md
+          echo "" >> coverage-summary.md
+          echo "| Package | Statements | Coverage |" >> coverage-summary.md
+          echo "| ------- | ---------- | -------- |" >> coverage-summary.md
+
+          # Extract package coverage from coverage.txt
+          grep -v "total:" coverage.txt | grep -v "^ok" | while read -r line; do
+            package=$(echo "$line" | awk '{print $1}')
+            statements=$(echo "$line" | awk '{print $(NF-2)}')
+            coverage=$(echo "$line" | awk '{print $NF}' | sed 's/%//')
+
+            # Determine color based on coverage
+            if (( $(echo "$coverage >= 80" | bc -l) )); then
+              color="green"
+            elif (( $(echo "$coverage >= 70" | bc -l) )); then
+              color="yellow"
+            else
+              color="red"
+            fi
+
+            echo "| $package | $statements | <span style=\"color:$color\">$coverage%</span> |" >> coverage-summary.md
+          done
+
+          # Add total coverage at the end
+          echo "| **Total** | | **${total_coverage}%** |" >> coverage-summary.md
+
+          # Save as artifact
+          mv coverage-summary.md ..
+
+      - name: Upload coverage summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-summary
+          path: coverage-summary.md
+
+      - name: Publish coverage summary
+        run: |
+          cat coverage-summary.md >> $GITHUB_STEP_SUMMARY
+
+      # Uncomment to use Codecov (requires CODECOV_TOKEN secret)
+      # - name: Upload to Codecov
+      #   uses: codecov/codecov-action@v4
+      #   with:
+      #     files: ./coverage-data/coverage.out
+      #     fail_ci_if_error: false
+      #     verbose: true
+      #     token: ${{ secrets.CODECOV_TOKEN }} # Optional: for private repos
+
+      # Optional: Comment on PR with coverage changes
+      # - name: Comment on PR with coverage
+      #   if: github.event_name == 'pull_request'
+      #   uses: marocchino/sticky-pull-request-comment@v2
+      #   with:
+      #     path: coverage-summary.md
+
   release-test:
     name: Release Build Test
     runs-on: ubuntu-latest
-    needs: [test, integration-test]
+    needs: [test, integration-test, coverage-report]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
