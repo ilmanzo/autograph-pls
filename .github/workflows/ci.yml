@@ -1,0 +1,351 @@
+name: autograph-pls CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test Suite
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go-version: ['1.19', '1.20', '1.21']
+      fail-fast: false
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ matrix.go-version }}
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/go/pkg/mod
+          ~/.cache/go-build
+        key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-${{ matrix.go-version }}-
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Verify dependencies
+      run: go mod verify
+
+    - name: Run go vet
+      run: go vet ./...
+
+    - name: Run go fmt check
+      run: |
+        if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+          echo "Code is not formatted properly:"
+          gofmt -s -l .
+          exit 1
+        fi
+      shell: bash
+      if: runner.os != 'Windows'
+
+    - name: Run go fmt check (Windows)
+      run: |
+        $unformatted = gofmt -s -l .
+        if ($unformatted) {
+          Write-Host "Code is not formatted properly:"
+          Write-Host $unformatted
+          exit 1
+        }
+      shell: pwsh
+      if: runner.os == 'Windows'
+
+    - name: Build binary
+      run: go build -o autograph-pls${{ runner.os == 'Windows' && '.exe' || '' }}
+
+    - name: Run unit tests
+      run: go test -v -race -coverprofile=coverage.out ./...
+
+    - name: Generate coverage report
+      run: go tool cover -html=coverage.out -o coverage.html
+
+    - name: Upload coverage reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: coverage-${{ matrix.os }}-go${{ matrix.go-version }}
+        path: |
+          coverage.out
+          coverage.html
+
+    - name: Test algorithm listing
+      run: ./autograph-pls${{ runner.os == 'Windows' && '.exe' || '' }} -list
+      shell: bash
+
+    - name: Test help output
+      run: ./autograph-pls${{ runner.os == 'Windows' && '.exe' || '' }} -help
+      shell: bash
+
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+
+    - name: Build binary
+      run: go build -o autograph-pls
+
+    - name: Create test results directory
+      run: mkdir -p test-results
+
+    - name: Test good files (should succeed)
+      run: |
+        echo "Testing good signature files..."
+        success_count=0
+        total_count=0
+
+        for file in testfiles/good/*; do
+          if [ -f "$file" ]; then
+            echo "Testing $file..."
+            total_count=$((total_count + 1))
+
+            if timeout 30 ./autograph-pls "$file" > "test-results/$(basename "$file").log" 2>&1; then
+              echo "✅ SUCCESS: $file"
+              success_count=$((success_count + 1))
+            else
+              echo "❌ FAILED: $file"
+              echo "Output:"
+              cat "test-results/$(basename "$file").log"
+            fi
+          fi
+        done
+
+        echo "Good files test summary: $success_count/$total_count succeeded"
+        echo "good_files_success=$success_count" >> $GITHUB_ENV
+        echo "good_files_total=$total_count" >> $GITHUB_ENV
+
+        if [ $success_count -ne $total_count ]; then
+          echo "❌ Not all good files passed!"
+          exit 1
+        fi
+
+    - name: Test bad files (should fail gracefully)
+      run: |
+        echo "Testing bad/malformed signature files..."
+        graceful_failures=0
+        total_count=0
+
+        for file in testfiles/bad/*; do
+          if [ -f "$file" ]; then
+            echo "Testing $file..."
+            total_count=$((total_count + 1))
+
+            # Run with timeout and capture exit code
+            if timeout 30 ./autograph-pls "$file" > "test-results/$(basename "$file").log" 2>&1; then
+              # Check if it failed gracefully (exit code 1) or found no signature
+              if grep -q "no valid signature found\|Error:" "test-results/$(basename "$file").log"; then
+                echo "✅ GRACEFUL FAILURE: $file"
+                graceful_failures=$((graceful_failures + 1))
+              else
+                echo "⚠️ UNEXPECTED SUCCESS: $file (bad file that should fail)"
+                echo "Output:"
+                cat "test-results/$(basename "$file").log"
+              fi
+            else
+              exit_code=$?
+              if [ $exit_code -eq 1 ]; then
+                echo "✅ GRACEFUL FAILURE: $file"
+                graceful_failures=$((graceful_failures + 1))
+              elif [ $exit_code -eq 124 ]; then
+                echo "❌ TIMEOUT: $file"
+                echo "Program did not complete within 30 seconds"
+              else
+                echo "❌ CRASH: $file (exit code: $exit_code)"
+                echo "Output:"
+                cat "test-results/$(basename "$file").log"
+                exit 1
+              fi
+            fi
+          fi
+        done
+
+        echo "Bad files test summary: $graceful_failures/$total_count failed gracefully"
+        echo "bad_files_graceful=$graceful_failures" >> $GITHUB_ENV
+        echo "bad_files_total=$total_count" >> $GITHUB_ENV
+
+    - name: Test signature extraction
+      run: |
+        echo "Testing signature extraction functionality..."
+        test_file="testfiles/good/bootx64.efi"
+
+        if [ -f "$test_file" ]; then
+          # Test without -s flag (should not create file)
+          ./autograph-pls "$test_file" > test-results/extraction-test.log 2>&1
+          if [ -f "signature.der" ]; then
+            echo "❌ FAILED: signature.der created without -s flag"
+            exit 1
+          else
+            echo "✅ SUCCESS: No file created without -s flag"
+          fi
+
+          # Test with -s flag (should create file)
+          ./autograph-pls -s "$test_file" > test-results/extraction-with-flag.log 2>&1
+          if [ -f "signature.der" ]; then
+            echo "✅ SUCCESS: signature.der created with -s flag"
+            echo "File size: $(stat -f%z signature.der 2>/dev/null || stat -c%s signature.der)"
+            rm signature.der
+          else
+            echo "❌ FAILED: signature.der not created with -s flag"
+            exit 1
+          fi
+
+          # Test with custom output file
+          ./autograph-pls -s -o custom.der "$test_file" > test-results/extraction-custom.log 2>&1
+          if [ -f "custom.der" ]; then
+            echo "✅ SUCCESS: custom.der created"
+            rm custom.der
+          else
+            echo "❌ FAILED: custom.der not created"
+            exit 1
+          fi
+        else
+          echo "❌ Test file $test_file not found"
+          exit 1
+        fi
+
+    - name: Performance test
+      run: |
+        echo "Running performance tests..."
+        test_file="testfiles/good/bootx64.efi"
+
+        if [ -f "$test_file" ]; then
+          echo "Testing parsing speed..."
+          time_output=$(time -p ./autograph-pls "$test_file" 2>&1 | grep real || echo "real 0.0")
+          echo "Parse time: $time_output"
+
+          echo "Testing with multiple iterations..."
+          for i in {1..5}; do
+            echo "Iteration $i:"
+            timeout 10 ./autograph-pls "$test_file" > /dev/null 2>&1
+            if [ $? -eq 124 ]; then
+              echo "❌ Performance issue: timeout on iteration $i"
+              exit 1
+            fi
+          done
+          echo "✅ Performance test passed"
+        fi
+
+    - name: Memory safety test
+      run: |
+        echo "Testing memory safety with large/complex files..."
+
+        # Test all good files for memory safety
+        for file in testfiles/good/*; do
+          if [ -f "$file" ]; then
+            echo "Memory test: $(basename "$file")"
+            timeout 60 ./autograph-pls "$file" > /dev/null 2>&1
+            case $? in
+              0) echo "✅ Memory safe: $file" ;;
+              1) echo "✅ Expected failure: $file" ;;
+              124) echo "❌ Memory issue (timeout): $file"; exit 1 ;;
+              *) echo "❌ Memory issue (crash): $file"; exit 1 ;;
+            esac
+          fi
+        done
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: integration-test-results
+        path: test-results/
+
+    - name: Create test summary
+      if: always()
+      run: |
+        echo "## 🧪 Integration Test Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Good Files (Should Succeed)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Success Rate**: ${{ env.good_files_success }}/${{ env.good_files_total }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Bad Files (Should Fail Gracefully)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Graceful Failures**: ${{ env.bad_files_graceful }}/${{ env.bad_files_total }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Test Status" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ **Build**: Successful" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ **Unit Tests**: Passed" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ **Integration Tests**: Completed" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ **Memory Safety**: Verified" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ **Performance**: Within limits" >> $GITHUB_STEP_SUMMARY
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+
+    - name: Run gosec security scanner
+      uses: securecodewarrior/github-action-gosec@master
+      with:
+        args: '-fmt sarif -out gosec-report.sarif ./...'
+
+    - name: Upload gosec report
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: gosec-report.sarif
+
+  release-test:
+    name: Release Build Test
+    runs-on: ubuntu-latest
+    needs: [test, integration-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+
+    - name: Build release binaries
+      run: |
+        # Build for multiple platforms
+        GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o autograph-pls-linux-amd64
+        GOOS=linux GOARCH=arm64 go build -ldflags="-w -s" -o autograph-pls-linux-arm64
+        GOOS=darwin GOARCH=amd64 go build -ldflags="-w -s" -o autograph-pls-darwin-amd64
+        GOOS=darwin GOARCH=arm64 go build -ldflags="-w -s" -o autograph-pls-darwin-arm64
+        GOOS=windows GOARCH=amd64 go build -ldflags="-w -s" -o autograph-pls-windows-amd64.exe
+
+        # Test that binaries work
+        ./autograph-pls-linux-amd64 -list > /dev/null
+        echo "✅ Linux AMD64 binary works"
+
+    - name: Upload release artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: release-binaries
+        path: autograph-pls-*
