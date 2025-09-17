@@ -1,3 +1,6 @@
+// parsesign.go v0.0.1
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
@@ -1277,7 +1280,7 @@ func getContextSpecificTagName(tag int, isCompound bool) string {
 	return fmt.Sprintf("CONTEXT [%d]", tag)
 }
 
-// formatPrimitiveContent formats the content of primitive ASN.1 elements
+// formats the content of primitive ASN.1 elements
 func formatPrimitiveContent(tag int, content []byte) string {
 	switch tag {
 	case TagBoolean: // BOOLEAN
