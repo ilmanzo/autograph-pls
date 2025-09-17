@@ -267,12 +267,15 @@ var oidNames = map[string]string{
 	"1.2.840.113549.3.1":     "rc4-40",
 }
 
+const version = "0.0.1"
+
 // Config holds command-line configuration
 type Config struct {
 	FilePath       string
 	SaveFile       bool
 	OutputFile     string
 	ListAlgorithms bool
+	ShowVersion    bool
 }
 
 // SignatureValidation holds validation results for signature fields
@@ -863,6 +866,7 @@ func parseArgs() (*Config, error) {
 	flag.BoolVar(&config.SaveFile, "s", false, "save extracted signature to file (required for file output)")
 	flag.StringVar(&config.OutputFile, "o", "signature.der", "output filename when using -s flag")
 	flag.BoolVar(&config.ListAlgorithms, "list", false, "display all supported cryptographic algorithms and OIDs")
+	flag.BoolVar(&config.ShowVersion, "v", false, "display program version")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "autograph-pls - ASN.1 Signature Parser and Validator\n")
 		fmt.Fprintf(os.Stderr, "\nUsage: %s [options] <file_path>\n", os.Args[0])
@@ -878,11 +882,12 @@ func parseArgs() (*Config, error) {
 		fmt.Fprintf(os.Stderr, "  %s -s myfile.exe                # Extract signature to signature.der\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -s -o custom.der myfile.exe  # Extract signature to custom.der\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -list                        # Show all supported algorithms\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -v                           # Show program version\n", os.Args[0])
 	}
 	flag.Parse()
 
 	// Handle list algorithms flag
-	if config.ListAlgorithms {
+	if config.ListAlgorithms || config.ShowVersion {
 		return config, nil
 	}
 
@@ -921,6 +926,12 @@ func main() {
 	// Handle list algorithms option
 	if config.ListAlgorithms {
 		listSupportedAlgorithms()
+		return
+	}
+
+	// Handle version flag
+	if config.ShowVersion {
+		fmt.Printf("autograph-pls version %s\n", version)
 		return
 	}
 
@@ -1400,7 +1411,7 @@ func formatPrimitiveContent(tag int, content []byte) string {
 	}
 }
 
-// parseOID parses an ASN.1 OBJECT IDENTIFIER
+// parses an ASN.1 OBJECT IDENTIFIER
 func parseOID(content []byte) string {
 	if len(content) == 0 {
 		return ""
