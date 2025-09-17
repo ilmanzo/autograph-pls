@@ -1,5 +1,6 @@
 // parsesign.go v0.0.1
 // SPDX-License-Identifier: Apache-2.0
+// this file comes from upstream https://github.com/autograph-pls/parsesign
 
 package main
 
