@@ -203,15 +203,6 @@ func TestSignatureValidation(t *testing.T) {
 			},
 		},
 		{
-			name:  "Country Name",
-			oid:   OIDCountryName,
-			value: "US",
-			expected: SignatureValidation{
-				HasCountryName: true,
-				CountryName:    "US",
-			},
-		},
-		{
 			name:  "Email Address",
 			oid:   OIDEmailAddress,
 			value: "test@example.com",
@@ -238,16 +229,10 @@ func TestSignatureValidation(t *testing.T) {
 // TestSignatureValidationComplete tests complete validation
 func TestSignatureValidationComplete(t *testing.T) {
 	completeValidation := SignatureValidation{
-		HasCommonName:       true,
-		HasCountryName:      true,
-		HasLocalityName:     true,
-		HasOrganizationName: true,
-		HasEmailAddress:     true,
-		CommonName:          "Test CA",
-		CountryName:         "US",
-		LocalityName:        "Test City",
-		OrganizationName:    "Test Org",
-		EmailAddress:        "test@example.com",
+		HasCommonName:   true,
+		HasEmailAddress: true,
+		CommonName:      "Test CA",
+		EmailAddress:    "test@example.com",
 	}
 
 	incompleteValidation := SignatureValidation{
@@ -410,7 +395,7 @@ func TestBoundsChecking(t *testing.T) {
 
 			parser.data = data
 			validation := &SignatureValidation{}
-			parser.findFieldsInASN1WithDepth(data, validation, 0)
+			parser.findFieldsInASN1WithDepth(data, validation, 0, 0)
 		})
 	}
 }
@@ -429,18 +414,15 @@ func TestRecursionLimits(t *testing.T) {
 	}()
 
 	// Test with maximum depth + 1
-	parser.findFieldsInASN1WithDepth([]byte{0x30, 0x02, 0x01, 0x01}, validation, MaxRecursionDepth+1)
+	parser.findFieldsInASN1WithDepth([]byte{0x30, 0x02, 0x01, 0x01}, validation, MaxRecursionDepth+1, 0)
 }
 
 // TestDisplayResults tests the display functionality
 func TestDisplayResults(t *testing.T) {
 	results := DisplayResults{
 		Validation: SignatureValidation{
-			HasCommonName:   true,
-			CommonName:      "Test CA",
-			HasCountryName:  true,
-			CountryName:     "US",
-			HasLocalityName: false,
+			HasCommonName: true,
+			CommonName:    "Test CA",
 		},
 		KeySize: 2048,
 		Offset:  1024,
@@ -471,8 +453,7 @@ func TestDisplayResults(t *testing.T) {
 	expectedStrings := []string{
 		"Signature Validation:",
 		"Common Name: true (Test CA)",
-		"Country Name: true (US)",
-		"Locality Name: false",
+		"Email Address: false",
 	}
 
 	for _, expected := range expectedStrings {
@@ -678,7 +659,8 @@ func TestErrorHandling(t *testing.T) {
 		{
 			name: "InvalidASN1Structure",
 			test: func() error {
-				invalidData := []byte{0x30, 0x82, 0xFF, 0xFF} // Invalid large length
+				// Invalid large length
+				invalidData := []byte{0x30, 0x82, 0xFF, 0xFF}
 				parser := NewSignatureParser(invalidData)
 				_, _, err := parser.FindValidSignature()
 				return err
@@ -716,7 +698,7 @@ func TestMemorySafety(t *testing.T) {
 
 			parser := NewSignatureParser(data)
 			validation := &SignatureValidation{}
-			parser.findFieldsInASN1WithDepth(data, validation, 0)
+			parser.findFieldsInASN1WithDepth(data, validation, 0, 0)
 		})
 	}
 }
@@ -739,7 +721,7 @@ func TestConcurrency(t *testing.T) {
 
 			parser := NewSignatureParser(testData)
 			validation := &SignatureValidation{}
-			parser.findFieldsInASN1WithDepth(testData, validation, 0)
+			parser.findFieldsInASN1WithDepth(testData, validation, 0, 0)
 		}()
 	}
 
@@ -758,9 +740,6 @@ func TestHelperFunctions(t *testing.T) {
 	// Test that all required OIDs are present
 	requiredOIDs := []string{
 		OIDCommonName,
-		OIDCountryName,
-		OIDLocalityName,
-		OIDOrganizationName,
 		OIDEmailAddress,
 	}
 
